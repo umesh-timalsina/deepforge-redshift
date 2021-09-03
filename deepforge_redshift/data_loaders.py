@@ -15,6 +15,7 @@ class DataSetSampler:
     """Sampler for the dataset
     This class is used to load the Dataset(~53GB) or a mmap,
     sample it and return the indexes according to the values.
+
     Parameters
     ----------
     seed : int, default = None
@@ -25,6 +26,7 @@ class DataSetSampler:
         the labels array
     test_size: float, default=0.2
         The test size of the dataset
+
     Attributes
     ----------
     cube : np.ndarray
@@ -34,12 +36,9 @@ class DataSetSampler:
     train_indices : np.ndarray
         The intersection of the indexes in the dataset with
         redshifts in the desired deredened petro mags
-    Notes
-    -----
-    If no mmaps are provided, the dataset is assumed to be in BASE_DIR.
     """
 
-    def __init__(self, seed=42, cube=None, labels=None, test_size=0.2):
+    def __init__(self, cube, labels, seed=42, test_size=0.2):
         self.logger = get_logger(self.__class__.__name__)
         self.cube = cube
         self.labels = labels
@@ -75,8 +74,8 @@ class DataSetSampler:
     def get_k_fold_sequences(self, num_folds=5, **kwargs):
         """Return `k-folds` RedShiftDataCubeSequences from the dataset."""
         folder = KFold(n_splits=num_folds, random_state=self.seed, shuffle=True)
-        num_samples = int(self.train_indices.shape[0])
         X = self.train_indices
+
         folds = {}
         for fold_no, (train, test) in enumerate(folder.split(X), start=1):
             folds["Fold_{}".format(fold_no)] = {
