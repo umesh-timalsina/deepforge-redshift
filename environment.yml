@@ -1,0 +1,10 @@
+name: deepforge-astro
+dependencies:
+  - python=3.7
+  - pip=21.0.1
+  - pip:
+      - tensorflow-gpu==2.3.0
+      - numpy
+      - pre-commit
+      - black
+      - isort
