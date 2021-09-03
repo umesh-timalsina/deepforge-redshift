@@ -1,4 +1,5 @@
 import numpy as np
+from sklearn.model_selection import KFold, train_test_split
 from tensorflow.keras.utils import Sequence
 
 from deepforge_redshift.utils import get_logger
@@ -45,106 +46,54 @@ class DataSetSampler:
         self.train_indices, self.test_indices = train_test_split(
             self._find_intersection(), test_size=test_size, random_state=seed
         )
+        self.logger.info(
+            "{}(Training), {}(Testing) are going to be used".format(
+                self.train_indices.shape[0], self.test_indices.shape[0]
+            )
+        )
         self.seed = seed
 
     def _find_intersection(self):
         """find the galaxies in the dataset with desired values"""
         redshifts = self.labels[REDSHIFT_KEY]
         dered_petro_mag = self.labels[DEREDENED_PETRO_KEY]
+
         (idxes_redshifts,) = (redshifts <= MAX_REDSHIFT_VALUES).nonzero()
         (idxes_dered,) = (dered_petro_mag <= MAX_DERED_PETRO_MAG).nonzero()
         intersection = np.intersect1d(
             idxes_redshifts, idxes_dered, return_indices=False
         )
+
         self.logger.info(
-            f"There are {intersection.shape[0]} galaxies with redshift "
-            f"values between (0, {MAX_REDSHIFT_VALUES}] and "
-            f"dered_petro_mag between (0, {MAX_DERED_PETRO_MAG}]."
+            "There are {} galaxies with redshift ".format(intersection.shape[0])
+            + "values between (0, {}] and ".format(MAX_REDSHIFT_VALUES)
+            + "dered_petro_mag between (0, {}].".format(MAX_DERED_PETRO_MAG)
         )
 
         return intersection
 
-    def return_k_fold_indices(
-        self, percentage=2, num_folds=10, return_test_indices=False
-    ):
-        """Return k-folds of intersecting indices from the dataset
-        Parameters
-        ----------
-        percentage : int, default=2
-            The percentage of the dataset to return indices from
-        num_folds : int, default=10
-            The num of folds to return
-        return_test_indices : bool, default=False
-            Whether or not to return test indices for the dataset
-        Returns
-        -------
-        np.ndarray
-            Array of indexes in the dataset with folds
-        """
-        num_samples = int(self.train_indices.shape[0] * percentage) // 100
-        self.logger.info(
-            f"sampling at {percentage} % results in {num_samples} for "
-            f"training and {self.train_indices.shape[0] - num_samples} testing."
+    def get_k_fold_sequences(self, num_folds=5, **kwargs):
+        """Return `k-folds` RedShiftDataCubeSequences from the dataset."""
+        folder = KFold(n_splits=num_folds, random_state=self.seed, shuffle=True)
+        num_samples = int(self.train_indices.shape[0])
+        X = self.train_indices
+        folds = {}
+        for fold_no, (train, test) in enumerate(folder.split(X), start=1):
+            folds["Fold_{}".format(fold_no)] = {
+                "train": RedShiftDataCubeSequence(
+                    self.cube, self.labels, train, **kwargs
+                ),
+                "valid": RedShiftDataCubeSequence(
+                    self.cube, self.labels, test, **kwargs
+                ),
+            }
+
+        return folds
+
+    def __repr__(self):
+        return "<{} cube: {}, shape: {}>".format(
+            self.__class__.__name__, self.cube.shape, self.labels.shape
         )
-
-        sample_idxes_train, sample_idxes_test = train_test_split(
-            self.train_indices, random_state=self.seed, train_size=num_samples
-        )
-        k_folds = np.array_split(sample_idxes_train, num_folds)
-        folds_dict = {}
-        for j in range(num_folds):
-            to_concat = [k_folds[i] for i in range(len(k_folds)) if i != j]
-            folds_dict[f"train_fold_{j+1}"] = np.concatenate(to_concat)
-            folds_dict[f"valid_fold_{j+1}"] = k_folds[j]
-
-        if not return_test_indices:
-            return folds_dict
-
-        return folds_dict, sample_idxes_test
-
-    def return_samples(self, percentage=2, train=True):
-        """Return the samples from the dataset
-        Parameters
-        ----------
-        percentage: int, default=2
-            The percentage of the dataset to return for sampling
-        train: bool, default=True
-            If True, return the test set
-        """
-        num_samples = int(self.train_indices.shape[0] * percentage // 100)
-        self.logger.info(
-            f"sampling at {percentage} % results in {num_samples} for "
-            f"training and {self.train_indices.shape[0] - num_samples} testing."
-        )
-
-        sample_idxes_train, sample_idxes_test = train_test_split(
-            self.train_indices, random_state=self.seed, train_size=num_samples
-        )
-
-        assert (
-            sample_idxes_test.shape[0] + sample_idxes_train.shape[0]
-            == self.train_indices.shape[0]
-        )
-        assert np.intersect1d(sample_idxes_train, sample_idxes_test).size == 0
-
-        if train:
-            datacube = self.cube[sample_idxes_train]
-            z_truth = self.labels[REDSHIFT_KEY][sample_idxes_train]
-            ebv = self.labels[EBV_KEY][sample_idxes_train]
-        else:
-            datacube = self.cube[sample_idxes_test]
-            z_truth = self.labels[REDSHIFT_KEY][sample_idxes_test]
-            ebv = self.labels[EBV_KEY][sample_idxes_train]
-
-        return {"x": datacube, "ebv": ebv, "Y": z_truth}
-
-    def save_histogram(self, bins=180, kde=True, hist=True, filename="dataset.png"):
-        """Plot the histogram of the dataset"""
-        redshifts = self.labels["z"][self.train_indices]
-        sns.distplot(redshifts.flatten(), bins=bins, kde=kde, hist=hist)
-        plt.xlabel("Redshift values")
-        plt.ylabel("Frequency")
-        plt.savefig(filename)
 
 
 class RedShiftDataCubeSequence(Sequence):
@@ -202,7 +151,7 @@ class RedShiftDataCubeSequence(Sequence):
 
     def _to_categorical(self, values):
         """Convert to categorical"""
-        assert numpy.all(values <= self.bins[-1])
+        assert np.all(values <= self.bins[-1])
         return np.digitize(values, bins=self.bins, right=False)
 
     def _get_batch_indices(self, batch_no):
@@ -256,22 +205,12 @@ class RedShiftDataCubeSequence(Sequence):
     def __getitem__(self, index):
         return self._get_batch(index, by_category=True, augment=True)
 
+    def __repr__(self):
+        return "<{} num batches: {} batch size: {}>".format(
+            self.__class__.__name__, len(self), self.batch_size
+        )
+
     @staticmethod
     def _get_bins(num_bins, bins_range):
         bins = np.linspace(*bins_range, num_bins + 1)
         return bins[1:]
-
-
-if __name__ == "__main__":
-    from pathlib import Path
-
-    data_cube = np.load(
-        Path(__file__).parent.parent / "dataset/cube.npy", mmap_mode="r"
-    )
-    data_labels = np.load(
-        Path(__file__).parent.parent / "dataset/labels.npy", mmap_mode="r"
-    )
-
-    sequence = RedShiftDataCubeSequence(data_cube, data_labels)
-    print(len(sequence))
-    print(sequence[23])
