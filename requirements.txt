@@ -1,4 +1,5 @@
 numpy
 tensorflow==2.3.0
+spektral
 scikit-learn
 seaborn

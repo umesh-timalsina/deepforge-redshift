@@ -8,5 +8,6 @@ dependencies:
       - pre-commit
       - black
       - isort
+      - spektral
       - scikit-learn
       - seaborn
