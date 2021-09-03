@@ -1,0 +1,277 @@
+import numpy as np
+from tensorflow.keras.utils import Sequence
+
+from deepforge_redshift.utils import get_logger
+
+MAX_REDSHIFT_VALUES = 0.4
+MAX_DERED_PETRO_MAG = 17.8
+REDSHIFT_KEY = "z"
+DEREDENED_PETRO_KEY = "dered_petro_r"
+EBV_KEY = "EBV"
+
+
+class DataSetSampler:
+    """Sampler for the dataset
+    This class is used to load the Dataset(~53GB) or a mmap,
+    sample it and return the indexes according to the values.
+    Parameters
+    ----------
+    seed : int, default = None
+        random seed for numpy
+    cube : np.ndarray, default=None
+        the datacube
+    labels : np.ndarray, default=None
+        the labels array
+    test_size: float, default=0.2
+        The test size of the dataset
+    Attributes
+    ----------
+    cube : np.ndarray
+        The numpy array of the base dataset
+    labels : np.ndarray
+        The base directory for the dataset
+    train_indices : np.ndarray
+        The intersection of the indexes in the dataset with
+        redshifts in the desired deredened petro mags
+    Notes
+    -----
+    If no mmaps are provided, the dataset is assumed to be in BASE_DIR.
+    """
+
+    def __init__(self, seed=42, cube=None, labels=None, test_size=0.2):
+        self.logger = get_logger(self.__class__.__name__)
+        self.cube = cube
+        self.labels = labels
+        self.train_indices, self.test_indices = train_test_split(
+            self._find_intersection(), test_size=test_size, random_state=seed
+        )
+        self.seed = seed
+
+    def _find_intersection(self):
+        """find the galaxies in the dataset with desired values"""
+        redshifts = self.labels[REDSHIFT_KEY]
+        dered_petro_mag = self.labels[DEREDENED_PETRO_KEY]
+        (idxes_redshifts,) = (redshifts <= MAX_REDSHIFT_VALUES).nonzero()
+        (idxes_dered,) = (dered_petro_mag <= MAX_DERED_PETRO_MAG).nonzero()
+        intersection = np.intersect1d(
+            idxes_redshifts, idxes_dered, return_indices=False
+        )
+        self.logger.info(
+            f"There are {intersection.shape[0]} galaxies with redshift "
+            f"values between (0, {MAX_REDSHIFT_VALUES}] and "
+            f"dered_petro_mag between (0, {MAX_DERED_PETRO_MAG}]."
+        )
+
+        return intersection
+
+    def return_k_fold_indices(
+        self, percentage=2, num_folds=10, return_test_indices=False
+    ):
+        """Return k-folds of intersecting indices from the dataset
+        Parameters
+        ----------
+        percentage : int, default=2
+            The percentage of the dataset to return indices from
+        num_folds : int, default=10
+            The num of folds to return
+        return_test_indices : bool, default=False
+            Whether or not to return test indices for the dataset
+        Returns
+        -------
+        np.ndarray
+            Array of indexes in the dataset with folds
+        """
+        num_samples = int(self.train_indices.shape[0] * percentage) // 100
+        self.logger.info(
+            f"sampling at {percentage} % results in {num_samples} for "
+            f"training and {self.train_indices.shape[0] - num_samples} testing."
+        )
+
+        sample_idxes_train, sample_idxes_test = train_test_split(
+            self.train_indices, random_state=self.seed, train_size=num_samples
+        )
+        k_folds = np.array_split(sample_idxes_train, num_folds)
+        folds_dict = {}
+        for j in range(num_folds):
+            to_concat = [k_folds[i] for i in range(len(k_folds)) if i != j]
+            folds_dict[f"train_fold_{j+1}"] = np.concatenate(to_concat)
+            folds_dict[f"valid_fold_{j+1}"] = k_folds[j]
+
+        if not return_test_indices:
+            return folds_dict
+
+        return folds_dict, sample_idxes_test
+
+    def return_samples(self, percentage=2, train=True):
+        """Return the samples from the dataset
+        Parameters
+        ----------
+        percentage: int, default=2
+            The percentage of the dataset to return for sampling
+        train: bool, default=True
+            If True, return the test set
+        """
+        num_samples = int(self.train_indices.shape[0] * percentage // 100)
+        self.logger.info(
+            f"sampling at {percentage} % results in {num_samples} for "
+            f"training and {self.train_indices.shape[0] - num_samples} testing."
+        )
+
+        sample_idxes_train, sample_idxes_test = train_test_split(
+            self.train_indices, random_state=self.seed, train_size=num_samples
+        )
+
+        assert (
+            sample_idxes_test.shape[0] + sample_idxes_train.shape[0]
+            == self.train_indices.shape[0]
+        )
+        assert np.intersect1d(sample_idxes_train, sample_idxes_test).size == 0
+
+        if train:
+            datacube = self.cube[sample_idxes_train]
+            z_truth = self.labels[REDSHIFT_KEY][sample_idxes_train]
+            ebv = self.labels[EBV_KEY][sample_idxes_train]
+        else:
+            datacube = self.cube[sample_idxes_test]
+            z_truth = self.labels[REDSHIFT_KEY][sample_idxes_test]
+            ebv = self.labels[EBV_KEY][sample_idxes_train]
+
+        return {"x": datacube, "ebv": ebv, "Y": z_truth}
+
+    def save_histogram(self, bins=180, kde=True, hist=True, filename="dataset.png"):
+        """Plot the histogram of the dataset"""
+        redshifts = self.labels["z"][self.train_indices]
+        sns.distplot(redshifts.flatten(), bins=bins, kde=kde, hist=hist)
+        plt.xlabel("Redshift values")
+        plt.ylabel("Frequency")
+        plt.savefig(filename)
+
+
+class RedShiftDataCubeSequence(Sequence):
+    """The datacube sequence for redshift
+
+    Parameters
+    ----------
+    labels : np.mmap,
+        The mmap array for labels on the dataset
+    cube : np.mmap
+        The mmap array for cube on the dataset
+    idxes : np.ndarray, optional, default=None
+        The indexes of interest for this sequence
+    batch_size : int, default=128
+        The batch size
+    flip_prob : float, default=0.2
+        The probability of flipping (augmentation)
+    rotate_prob : float, default=0.2
+        The probability of 90 degree rotation (augmentation)
+    bins_range: tuple, default=(0, 0.4)
+        The range in which the redshift values fall
+    num_bins : int, default=180
+        The number of bins to divide redshift values to
+    logger: logging.logger instance
+        The logger
+    """
+
+    def __init__(
+        self,
+        cube,
+        labels,
+        idxes=None,
+        batch_size=128,
+        num_bins=180,
+        bins_range=(0, 0.4),
+        flip_prob=0.2,
+        rotate_prob=0.2,
+        logger=None,
+    ):
+        self.cube = cube
+        self.labels = labels
+        self.batch_size = batch_size
+        self.bins = self._get_bins(num_bins, bins_range)
+
+        if logger is None:
+            logger = get_logger(self.__class__.__name__)
+        self.logger = logger
+
+        if idxes is None:
+            idxes = np.array(range(cube.shape[0]))
+        self.idxes = idxes
+
+        self.flip_probability = flip_prob
+        self.rotate_probability = rotate_prob
+
+    def _to_categorical(self, values):
+        """Convert to categorical"""
+        assert numpy.all(values <= self.bins[-1])
+        return np.digitize(values, bins=self.bins, right=False)
+
+    def _get_batch_indices(self, batch_no):
+        """Get indices for a particular batch"""
+        if batch_no >= self.__len__():
+            raise IndexError(
+                "Batch number should be less than or equal to {}".format(len(self))
+            )
+        else:
+            return self.idxes[
+                batch_no * self.batch_size : batch_no * self.batch_size
+                + self.batch_size
+            ]
+
+    def _get_batch(self, index, by_category=False, augment=False):
+        batch_indices = self.get_batch_indices(index)
+        batch_cube = self.cube[batch_indices]
+        if augment:
+            flips = np.where(
+                np.random.rand(*batch_indices.shape) < self.flip_probability,
+                batch_indices,
+                -1,
+            )
+            rots = np.where(
+                np.random.rand(*batch_indices.shape) < self.rotate_probability,
+                batch_indices,
+                -1,
+            )
+            flips = flips[flips >= 0]
+            rots = rots[rots >= 0]
+            batch_cube[flips] = np.flip(batch_cube[flips])
+            for rot in rots:
+                batch_cube[rot] = np.rot90(batch_cube[rot], k=np.random.randint(1, 5))
+
+        z_truth = self.labels[REDSHIFT_KEY][batch_indices]
+        if by_category:
+            z_truth = self._to_categorical(z_truth)
+
+        ebv = np.expand_dims(self.labels[EBV_KEY][batch_indices], -1)
+        return (batch_cube, ebv), z_truth
+
+    def on_epoch_end(self):
+        self._reshuffle_indexes()
+
+    def _reshuffle_indexes(self):
+        np.random.shuffle(self.idxes)
+
+    def __len__(self):
+        return np.ceil(self.idxes.shape[0] / self.batch_size).astype(np.int)
+
+    def __getitem__(self, index):
+        return self._get_batch(index, by_category=True, augment=True)
+
+    @staticmethod
+    def _get_bins(num_bins, bins_range):
+        bins = np.linspace(*bins_range, num_bins + 1)
+        return bins[1:]
+
+
+if __name__ == "__main__":
+    from pathlib import Path
+
+    data_cube = np.load(
+        Path(__file__).parent.parent / "dataset/cube.npy", mmap_mode="r"
+    )
+    data_labels = np.load(
+        Path(__file__).parent.parent / "dataset/labels.npy", mmap_mode="r"
+    )
+
+    sequence = RedShiftDataCubeSequence(data_cube, data_labels)
+    print(len(sequence))
+    print(sequence[23])
