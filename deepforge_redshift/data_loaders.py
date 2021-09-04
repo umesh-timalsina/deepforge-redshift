@@ -71,10 +71,17 @@ class DataSetSampler:
 
         return intersection
 
-    def get_k_fold_sequences(self, num_folds=5, **kwargs):
+    def get_k_fold_sequences(self, num_folds=5, fraction=0.8, **kwargs):
         """Return `k-folds` RedShiftDataCubeSequences from the dataset."""
         folder = KFold(n_splits=num_folds, random_state=self.seed, shuffle=True)
-        X = self.train_indices
+        X, _ = train_test_split(
+            self.train_indices, random_state=self.seed, test_size=1 - fraction
+        )
+        self.logger.info(
+            "{} is {} of number of samples {}".format(
+                X.shape[0], fraction, self.train_indices.shape[0]
+            )
+        )
 
         folds = {}
         for fold_no, (train, test) in enumerate(folder.split(X), start=1):
