@@ -9,3 +9,5 @@ dependencies:
       - black
       - isort
       - spektral
+      - scikit-learn
+      - seaborn
