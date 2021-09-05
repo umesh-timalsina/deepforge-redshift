@@ -68,29 +68,28 @@ class DataSetSampler:
             + "values between (0, {}] and ".format(MAX_REDSHIFT_VALUES)
             + "dered_petro_mag between (0, {}].".format(MAX_DERED_PETRO_MAG)
         )
-
         return intersection
 
     def get_k_fold_sequences(self, num_folds=5, fraction=0.8, **kwargs):
         """Return `k-folds` RedShiftDataCubeSequences from the dataset."""
         folder = KFold(n_splits=num_folds, random_state=self.seed, shuffle=True)
-        X, _ = train_test_split(
+        train_fraction, _ = train_test_split(
             self.train_indices, random_state=self.seed, test_size=1 - fraction
         )
         self.logger.info(
             "{} is {} of number of samples {}".format(
-                X.shape[0], fraction, self.train_indices.shape[0]
+                train_fraction.shape[0], fraction, self.train_indices.shape[0]
             )
         )
 
         folds = {}
-        for fold_no, (train, test) in enumerate(folder.split(X), start=1):
+        for fold_no, (train, test) in enumerate(folder.split(train_fraction), start=1):
             folds["Fold_{}".format(fold_no)] = {
                 "train": RedShiftDataCubeSequence(
-                    self.cube, self.labels, train, **kwargs
+                    self.cube, self.labels, self.train_indices[train], **kwargs
                 ),
                 "valid": RedShiftDataCubeSequence(
-                    self.cube, self.labels, test, **kwargs
+                    self.cube, self.labels, self.train_indices[test], **kwargs
                 ),
             }
 
@@ -147,7 +146,6 @@ class RedShiftDataCubeSequence(Sequence):
         if logger is None:
             logger = get_logger(self.__class__.__name__)
         self.logger = logger
-
         if idxes is None:
             idxes = np.array(range(cube.shape[0]))
         self.idxes = idxes
@@ -173,22 +171,24 @@ class RedShiftDataCubeSequence(Sequence):
             ]
 
     def _get_batch(self, index, by_category=False, augment=False):
-        batch_indices = self.get_batch_indices(index)
+        batch_indices = self._get_batch_indices(index)
         batch_cube = self.cube[batch_indices]
         if augment:
             flips = np.where(
                 np.random.rand(*batch_indices.shape) < self.flip_probability,
                 batch_indices,
-                -1,
+                0,
             )
             rots = np.where(
                 np.random.rand(*batch_indices.shape) < self.rotate_probability,
                 batch_indices,
-                -1,
+                0,
             )
-            flips = flips[flips >= 0]
-            rots = rots[rots >= 0]
-            batch_cube[flips] = np.flip(batch_cube[flips])
+            (flips,) = np.nonzero(flips)
+            (rots,) = np.nonzero(rots)
+
+            for flip in flips:
+                batch_cube[flip] = np.flip(batch_cube[flip])
             for rot in rots:
                 batch_cube[rot] = np.rot90(batch_cube[rot], k=np.random.randint(1, 5))
 
