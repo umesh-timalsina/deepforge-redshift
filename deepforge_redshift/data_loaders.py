@@ -68,7 +68,6 @@ class DataSetSampler:
             + "values between (0, {}] and ".format(MAX_REDSHIFT_VALUES)
             + "dered_petro_mag between (0, {}].".format(MAX_DERED_PETRO_MAG)
         )
-        self.intersection = intersection
         return intersection
 
     def get_k_fold_sequences(self, num_folds=5, fraction=0.8, **kwargs):
