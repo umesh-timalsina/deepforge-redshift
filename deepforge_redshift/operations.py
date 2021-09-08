@@ -52,7 +52,7 @@ class KFoldsTraining:
                 epochs=self.number_of_epochs,
             )
             self.logger.info("The training for {} is complete".format(fold_name))
-            fold_weights[fold_name] = model.get_weights()
+            fold_weights[fold_name] = self.model.get_weights()
 
         return fold_weights
 
