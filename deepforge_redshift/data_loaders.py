@@ -95,6 +95,15 @@ class DataSetSampler:
 
         return folds
 
+    def get_test_sequence(self):
+        test_sequence = RedShiftDataCubeSequence(
+            cube=self.cube,
+            labels=self.labels,
+            idxes=self.test_indices,
+            is_training=False
+        )
+        return test_sequence
+
     def __repr__(self):
         return "<{} cube: {}, shape: {}>".format(
             self.__class__.__name__, self.cube.shape, self.labels.shape
@@ -137,6 +146,7 @@ class RedShiftDataCubeSequence(Sequence):
         flip_prob=0.2,
         rotate_prob=0.2,
         logger=None,
+        is_training=True
     ):
         self.cube = cube
         self.labels = labels
@@ -152,6 +162,7 @@ class RedShiftDataCubeSequence(Sequence):
 
         self.flip_probability = flip_prob
         self.rotate_probability = rotate_prob
+        self.is_training = is_training
 
     def _to_categorical(self, values):
         """Convert to categorical"""
@@ -209,7 +220,10 @@ class RedShiftDataCubeSequence(Sequence):
         return np.ceil(self.idxes.shape[0] / self.batch_size).astype(np.int)
 
     def __getitem__(self, index):
-        return self._get_batch(index, by_category=True, augment=True)
+        if self.is_training:
+            return self._get_batch(index, by_category=True, augment=True)
+        else:
+            return self._get_batch(index, by_category=False, augment=False)
 
     def __repr__(self):
         return "<{} num batches: {} batch size: {}>".format(
